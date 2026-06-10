@@ -136,6 +136,7 @@ export default function App() {
   const handleSetMethods   = makeListHandler("methods", setMethods);
 
   const addCustomer  = data => setDoc(doc(db, "customers", data.id), data);
+  const deleteCustomer = id => deleteDoc(doc(db, "customers", id));
   const addOrder     = data => setDoc(doc(db, "orders", data.id), data);
   const updateOrder  = data => setDoc(doc(db, "orders", data.id), data);
   const deleteOrder  = id   => deleteDoc(doc(db, "orders", id));
@@ -204,7 +205,7 @@ export default function App() {
         {tab === "new"   && <NewOrder customers={customers} addCustomer={addCustomer} orders={orders} addOrder={addOrder} {...lists} />}
         {tab === "stat"  && <Stats orders={orders} customers={customers} updateOrder={updateOrder} deleteOrder={deleteOrder} changeStatus={changeStatus} onGoToQuery={goToQuery} {...lists} />}
         {tab === "query" && <Query key={queryInitStatus} customers={customers} orders={orders} updateOrder={updateOrder} deleteOrder={deleteOrder} changeStatus={changeStatus} initStatusFilter={queryInitStatus} {...lists} />}
-        {tab === "settings" && <SettingsPage {...lists} />}
+        {tab === "settings" && <SettingsPage {...lists} customers={customers} orders={orders} deleteCustomer={deleteCustomer} />}
       </main>
       <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: `1px solid ${C.line}`, display: "flex", boxShadow: "0 -2px 12px rgba(0,0,0,0.04)" }}>
         {[{ k: "new", label: "建檔", icon: FilePlus }, { k: "stat", label: "統計", icon: BarChart3 }, { k: "query", label: "查歷史", icon: Search }, { k: "settings", label: "設定", icon: Settings }].map(({ k, label, icon: Icon }) => (
@@ -997,7 +998,37 @@ function OptionListEditor({ label, list, setList }) {
   );
 }
 
-function SettingsPage({ itemNames, setItemNames, brands, setBrands, methods, setMethods, masters, setMasters, types, setTypes, platforms, setPlatforms }) {
+function CustomerListEditor({ customers, orders, deleteCustomer }) {
+  const [confirmId, setConfirmId] = useState(null);
+  const orderCount = (id) => orders.filter((o) => o.cust === id).length;
+  return (
+    <Card>
+      <Label style={{ marginBottom: 10 }}>客戶</Label>
+      {customers.length === 0 && <span style={{ fontSize: 13, color: C.sub }}>尚無客戶</span>}
+      {customers.map((c) => (
+        <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0" }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>{c.name}</div>
+            <div style={{ fontSize: 12, color: C.sub }}>@{c.id} · {orderCount(c.id)} 筆訂單</div>
+          </div>
+          {confirmId === c.id ? (
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ fontSize: 12, color: C.red, fontWeight: 600 }}>確定刪除？</span>
+              <button onClick={() => { deleteCustomer(c.id); setConfirmId(null); }} style={{ padding: "5px 10px", background: C.red, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>刪除</button>
+              <button onClick={() => setConfirmId(null)} style={{ padding: "5px 10px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8, fontSize: 12, cursor: "pointer" }}>取消</button>
+            </div>
+          ) : (
+            <button onClick={() => setConfirmId(c.id)} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, display: "flex" }} aria-label={`刪除${c.name}`}>
+              <Trash2 size={15} color={C.sub} />
+            </button>
+          )}
+        </div>
+      ))}
+    </Card>
+  );
+}
+
+function SettingsPage({ itemNames, setItemNames, brands, setBrands, methods, setMethods, masters, setMasters, types, setTypes, platforms, setPlatforms, customers, orders, deleteCustomer }) {
   return (
     <div>
       <SectionTitle>下拉選單管理</SectionTitle>
@@ -1008,6 +1039,10 @@ function SettingsPage({ itemNames, setItemNames, brands, setBrands, methods, set
       <OptionListEditor label="師傅" list={masters} setList={setMasters} />
       <OptionListEditor label="類型" list={types} setList={setTypes} />
       <OptionListEditor label="來源平台" list={platforms} setList={setPlatforms} />
+
+      <SectionTitle>客戶管理</SectionTitle>
+      <Hint style={{ marginTop: 0, marginBottom: 14 }}>刪除客戶不會刪除其歷史訂單，訂單仍會保留 @id，但不再顯示客戶姓名。</Hint>
+      <CustomerListEditor customers={customers} orders={orders} deleteCustomer={deleteCustomer} />
     </div>
   );
 }
