@@ -5,6 +5,7 @@ import { collection, doc, onSnapshot, setDoc, deleteDoc, getDoc } from "firebase
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 
 // ===== 初始資料 =====
+const ALLOWED_EMAILS = ["max83913@gmail.com", "r790202@gmail.com"];
 const INIT_PLATFORMS = ["IG", "FB", "LINE", "Threads", "朋友介紹", "現場"];
 const INIT_MASTERS = ["師傅A", "師傅B", "師傅C"];
 const INIT_TYPES = ["改衣", "訂做"];
@@ -34,10 +35,20 @@ export default function App() {
   const [types, setTypes] = useState(INIT_TYPES);
   const [loaded, setLoaded] = useState(false);
   const [user, setUser] = useState(undefined); // undefined = checking, null = not logged in
+  const [unauthorized, setUnauthorized] = useState(false);
   const loadedRef = useRef({ c: false, o: false });
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, u => setUser(u ?? null));
+    const unsub = onAuthStateChanged(auth, u => {
+      if (u && !ALLOWED_EMAILS.includes(u.email)) {
+        signOut(auth);
+        setUnauthorized(true);
+        setUser(null);
+        return;
+      }
+      setUnauthorized(false);
+      setUser(u ?? null);
+    });
     return unsub;
   }, []);
 
@@ -104,6 +115,9 @@ export default function App() {
     if (order) setDoc(doc(db, "orders", id), { ...order, status });
   };
 
+  const [queryInitStatus, setQueryInitStatus] = useState("");
+  const goToQuery = (status = "") => { setQueryInitStatus(status); setTab("query"); };
+
   const lists = {
     masters, setMasters: handleSetMasters,
     platforms, setPlatforms: handleSetPlatforms,
@@ -123,7 +137,10 @@ export default function App() {
     <div style={{ minHeight: "100vh", background: C.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontFamily: "system-ui,-apple-system,'Segoe UI',sans-serif", color: C.ink }}>
       <div style={{ textAlign: "center", padding: "40px 24px", background: "#fff", borderRadius: 16, boxShadow: "0 4px 24px rgba(0,0,0,0.08)", maxWidth: 320, width: "100%" }}>
         <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: 1, color: C.navy, marginBottom: 6 }}>改衣記帳</div>
-        <div style={{ color: C.sub, fontSize: 13, marginBottom: 32 }}>請先登入以繼續使用</div>
+        <div style={{ color: C.sub, fontSize: 13, marginBottom: unauthorized ? 8 : 32 }}>請先登入以繼續使用</div>
+        {unauthorized && (
+          <div style={{ color: C.red, fontSize: 13, marginBottom: 24, fontWeight: 600 }}>此帳號未授權使用，請聯絡管理員</div>
+        )}
         <button
           onClick={() => signInWithPopup(auth, googleProvider)}
           style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 10, padding: "12px 20px", border: "1px solid #E2E8F0", borderRadius: 10, background: "#fff", cursor: "pointer", fontSize: 15, fontWeight: 600, color: C.ink, boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}
@@ -153,8 +170,8 @@ export default function App() {
       </header>
       <main style={{ maxWidth: 560, margin: "0 auto", padding: 16 }}>
         {tab === "new"   && <NewOrder customers={customers} addCustomer={addCustomer} orders={orders} addOrder={addOrder} {...lists} />}
-        {tab === "stat"  && <Stats orders={orders} />}
-        {tab === "query" && <Query customers={customers} orders={orders} updateOrder={updateOrder} deleteOrder={deleteOrder} changeStatus={changeStatus} {...lists} />}
+        {tab === "stat"  && <Stats orders={orders} onGoToQuery={goToQuery} />}
+        {tab === "query" && <Query key={queryInitStatus} customers={customers} orders={orders} updateOrder={updateOrder} deleteOrder={deleteOrder} changeStatus={changeStatus} initStatusFilter={queryInitStatus} {...lists} />}
       </main>
       <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: `1px solid ${C.line}`, display: "flex", boxShadow: "0 -2px 12px rgba(0,0,0,0.04)" }}>
         {[{ k: "new", label: "建檔", icon: FilePlus }, { k: "stat", label: "統計", icon: BarChart3 }, { k: "query", label: "查歷史", icon: Search }].map(({ k, label, icon: Icon }) => (
@@ -398,7 +415,7 @@ function NewOrder({ customers, addCustomer, orders, addOrder, masters, setMaster
 // ===== 統計頁 =====
 const MONTHS = ["01","02","03","04","05","06","07","08","09","10","11","12"];
 
-function Stats({ orders }) {
+function Stats({ orders, onGoToQuery }) {
   const [yearSel, setYearSel] = useState("");
   const [monthSel, setMonthSel] = useState("");
   const availYears = useMemo(() => [...new Set(orders.map((o) => o.date.slice(0, 4)))].sort().reverse(), [orders]);
@@ -452,10 +469,11 @@ function Stats({ orders }) {
       </Card>
       <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
         {STATUSES.map(({ key, color, bg }) => (
-          <div key={key} style={{ flex: 1, background: bg, borderRadius: 12, padding: "10px 12px", textAlign: "center" }}>
+          <button key={key} onClick={() => onGoToQuery(key)}
+            style={{ flex: 1, background: bg, borderRadius: 12, padding: "10px 12px", textAlign: "center", border: `1.5px solid ${bg}`, cursor: "pointer" }}>
             <div style={{ fontSize: 22, fontWeight: 700, color }}>{agg.byStatus[key] || 0}</div>
             <div style={{ fontSize: 11, color, fontWeight: 600, marginTop: 2 }}>{key}</div>
-          </div>
+          </button>
         ))}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
@@ -488,10 +506,10 @@ const DIM_DEFS = [
   { key: "item", label: "修改項目" },
 ];
 
-function Query({ customers, orders, updateOrder, deleteOrder, changeStatus, masters, setMasters, platforms, setPlatforms, types, setTypes }) {
+function Query({ customers, orders, updateOrder, deleteOrder, changeStatus, masters, setMasters, platforms, setPlatforms, types, setTypes, initStatusFilter }) {
   const [dims, setDims] = useState({ name: false, id: false, item: false });
   const [q, setQ] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState(initStatusFilter || "");
   const [yearSel, setYearSel] = useState("");
   const [monthSel, setMonthSel] = useState("");
   const [dateFrom, setDateFrom] = useState("");
