@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
-import { Plus, Trash2, Search, BarChart3, FilePlus, X, Users, ChevronRight, ArrowLeft, Edit2 } from "lucide-react";
+import { Plus, Trash2, Search, BarChart3, FilePlus, X, Users, ChevronRight, ArrowLeft, Edit2, Settings } from "lucide-react";
 import { db, auth, googleProvider } from "./firebase";
 import { collection, doc, onSnapshot, setDoc, deleteDoc, getDoc } from "firebase/firestore";
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
@@ -20,6 +20,7 @@ const sumFee    = (o) => o.items.reduce((s, i) => s + (Number(i.fee)     || 0), 
 const sumItemMat = (o) => o.items.reduce((s, i) => s + (Number(i.itemMat) || 0), 0);
 const sumItemPay = (o) => o.items.reduce((s, i) => s + (Number(i.itemPay) || 0), 0);
 const profit     = (o) => sumFee(o) - (Number(o.masterPay) || 0) - sumItemMat(o) - (Number(o.elec) || 0);
+const itemProfit = (it) => (Number(it.fee) || 0) - (Number(it.itemMat) || 0) - (Number(it.itemPay) || 0);
 const NT         = (n) => "NT$" + (Number(n) || 0).toLocaleString();
 const blankItem  = () => ({ name: "", brand: "", method: "", size: "", fee: "", itemPay: "", itemMat: "", note: "" });
 const statusMeta = (key) => STATUSES.find((s) => s.key === key) || STATUSES[0];
@@ -33,10 +34,15 @@ export default function App() {
   const [masters, setMasters] = useState(INIT_MASTERS);
   const [platforms, setPlatforms] = useState(INIT_PLATFORMS);
   const [types, setTypes] = useState(INIT_TYPES);
+  const [itemNames, setItemNames] = useState([]);
+  const [brands, setBrands] = useState([]);
+  const [methods, setMethods] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [user, setUser] = useState(undefined); // undefined = checking, null = not logged in
   const [unauthorized, setUnauthorized] = useState(false);
   const loadedRef = useRef({ c: false, o: false });
+  const configRef = useRef(null);
+  const seededRef = useRef(false);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, u => {
@@ -55,15 +61,22 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     loadedRef.current = { c: false, o: false };
+    configRef.current = null;
+    seededRef.current = false;
     setLoaded(false);
 
     getDoc(doc(db, "config", "lists")).then(snap => {
       if (snap.exists()) {
         const d = snap.data();
+        configRef.current = d;
         if (d.masters?.length) setMasters(d.masters);
         if (d.platforms?.length) setPlatforms(d.platforms);
         if (d.types?.length) setTypes(d.types);
+        if (d.itemNames?.length) setItemNames(d.itemNames);
+        if (d.brands?.length) setBrands(d.brands);
+        if (d.methods?.length) setMethods(d.methods);
       } else {
+        configRef.current = {};
         setDoc(doc(db, "config", "lists"), { masters: INIT_MASTERS, platforms: INIT_PLATFORMS, types: INIT_TYPES });
       }
     });
@@ -84,27 +97,43 @@ export default function App() {
     return () => { unsubC(); unsubO(); };
   }, [user]);
 
-  const handleSetMasters = fn => {
-    setMasters(prev => {
+  // 一次性：把項目名稱/品牌/改法的歷史值搬到 Firestore 清單（若尚未設定過）
+  useEffect(() => {
+    if (!loaded || seededRef.current || !configRef.current) return;
+    seededRef.current = true;
+    const d = configRef.current;
+    const updates = {};
+    if (d.itemNames === undefined) {
+      const seeded = [...new Set(orders.flatMap(o => o.items.map(i => i.name)).filter(Boolean))].sort();
+      setItemNames(seeded);
+      updates.itemNames = seeded;
+    }
+    if (d.brands === undefined) {
+      const seeded = [...new Set(orders.flatMap(o => o.items.map(i => i.brand || "")).filter(Boolean))].sort();
+      setBrands(seeded);
+      updates.brands = seeded;
+    }
+    if (d.methods === undefined) {
+      const seeded = [...new Set(orders.flatMap(o => o.items.map(i => i.method)).filter(Boolean))].sort();
+      setMethods(seeded);
+      updates.methods = seeded;
+    }
+    if (Object.keys(updates).length) setDoc(doc(db, "config", "lists"), updates, { merge: true });
+  }, [loaded]);
+
+  const makeListHandler = (key, setter) => fn => {
+    setter(prev => {
       const next = typeof fn === "function" ? fn(prev) : fn;
-      setDoc(doc(db, "config", "lists"), { masters: next }, { merge: true });
+      setDoc(doc(db, "config", "lists"), { [key]: next }, { merge: true });
       return next;
     });
   };
-  const handleSetPlatforms = fn => {
-    setPlatforms(prev => {
-      const next = typeof fn === "function" ? fn(prev) : fn;
-      setDoc(doc(db, "config", "lists"), { platforms: next }, { merge: true });
-      return next;
-    });
-  };
-  const handleSetTypes = fn => {
-    setTypes(prev => {
-      const next = typeof fn === "function" ? fn(prev) : fn;
-      setDoc(doc(db, "config", "lists"), { types: next }, { merge: true });
-      return next;
-    });
-  };
+  const handleSetMasters   = makeListHandler("masters", setMasters);
+  const handleSetPlatforms = makeListHandler("platforms", setPlatforms);
+  const handleSetTypes     = makeListHandler("types", setTypes);
+  const handleSetItemNames = makeListHandler("itemNames", setItemNames);
+  const handleSetBrands    = makeListHandler("brands", setBrands);
+  const handleSetMethods   = makeListHandler("methods", setMethods);
 
   const addCustomer  = data => setDoc(doc(db, "customers", data.id), data);
   const addOrder     = data => setDoc(doc(db, "orders", data.id), data);
@@ -122,6 +151,9 @@ export default function App() {
     masters, setMasters: handleSetMasters,
     platforms, setPlatforms: handleSetPlatforms,
     types, setTypes: handleSetTypes,
+    itemNames, setItemNames: handleSetItemNames,
+    brands, setBrands: handleSetBrands,
+    methods, setMethods: handleSetMethods,
   };
 
   // 檢查登入狀態中
@@ -170,11 +202,12 @@ export default function App() {
       </header>
       <main style={{ maxWidth: 560, margin: "0 auto", padding: 16 }}>
         {tab === "new"   && <NewOrder customers={customers} addCustomer={addCustomer} orders={orders} addOrder={addOrder} {...lists} />}
-        {tab === "stat"  && <Stats orders={orders} onGoToQuery={goToQuery} />}
+        {tab === "stat"  && <Stats orders={orders} customers={customers} updateOrder={updateOrder} deleteOrder={deleteOrder} changeStatus={changeStatus} onGoToQuery={goToQuery} {...lists} />}
         {tab === "query" && <Query key={queryInitStatus} customers={customers} orders={orders} updateOrder={updateOrder} deleteOrder={deleteOrder} changeStatus={changeStatus} initStatusFilter={queryInitStatus} {...lists} />}
+        {tab === "settings" && <SettingsPage {...lists} />}
       </main>
       <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: `1px solid ${C.line}`, display: "flex", boxShadow: "0 -2px 12px rgba(0,0,0,0.04)" }}>
-        {[{ k: "new", label: "建檔", icon: FilePlus }, { k: "stat", label: "統計", icon: BarChart3 }, { k: "query", label: "查歷史", icon: Search }].map(({ k, label, icon: Icon }) => (
+        {[{ k: "new", label: "建檔", icon: FilePlus }, { k: "stat", label: "統計", icon: BarChart3 }, { k: "query", label: "查歷史", icon: Search }, { k: "settings", label: "設定", icon: Settings }].map(({ k, label, icon: Icon }) => (
           <button key={k} onClick={() => setTab(k)} style={{ flex: 1, padding: "10px 0 12px", border: "none", background: "none", cursor: "pointer", color: tab === k ? C.blue : C.sub, display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
             <Icon size={22} strokeWidth={tab === k ? 2.4 : 1.8} /><span style={{ fontSize: 11, fontWeight: tab === k ? 700 : 500 }}>{label}</span>
           </button>
@@ -200,16 +233,24 @@ function AddInline({ placeholder, value, onChange, onConfirm, onCancel }) {
 }
 
 // ===== DynSelect：下拉 + 新增 + 頻率排序 =====
-function DynSelect({ value, onChange, list, setList, addLabel, orders, freqKey, style }) {
+function DynSelect({ value, onChange, list, setList, addLabel, orders, freqKey, itemFreqKey, emptyLabel, style }) {
   const [showAdd, setShowAdd] = useState(false);
   const [addVal, setAddVal] = useState("");
   const freqMap = useMemo(() => {
-    if (!orders || !freqKey) return {};
+    if (!orders) return {};
     const m = {};
-    orders.forEach((o) => { const v = o[freqKey]; if (v) m[v] = (m[v] || 0) + 1; });
+    if (freqKey) {
+      orders.forEach((o) => { const v = o[freqKey]; if (v) m[v] = (m[v] || 0) + 1; });
+    } else if (itemFreqKey) {
+      orders.forEach((o) => o.items.forEach((i) => { const v = i[itemFreqKey]; if (v) m[v] = (m[v] || 0) + 1; }));
+    }
     return m;
-  }, [orders, freqKey]);
-  const sorted = useMemo(() => freqSort(list, freqMap), [list, freqMap]);
+  }, [orders, freqKey, itemFreqKey]);
+  const sorted = useMemo(() => {
+    const base = freqSort(list, freqMap);
+    if (value && !base.includes(value)) return [value, ...base];
+    return base;
+  }, [list, freqMap, value]);
   const confirm = () => {
     const v = addVal.trim();
     if (!v) return;
@@ -220,6 +261,7 @@ function DynSelect({ value, onChange, list, setList, addLabel, orders, freqKey, 
   if (showAdd) return <AddInline placeholder={addLabel} value={addVal} onChange={setAddVal} onConfirm={confirm} onCancel={() => { setShowAdd(false); setAddVal(""); }} />;
   return (
     <select value={value} onChange={(e) => { if (e.target.value === "__new__") setShowAdd(true); else onChange(e.target.value); }} style={{ ...inp, ...style }}>
+      {emptyLabel !== undefined && <option value="">{emptyLabel}</option>}
       {sorted.map((v) => <option key={v} value={v}>{v}</option>)}
       <option value="__new__">＋ 新增{addLabel}...</option>
     </select>
@@ -245,7 +287,7 @@ function MasterPayField({ autoSum, override, setOverride, manual, setManual }) {
 }
 
 // ===== ItemFields：項目編輯區（新增/編輯共用）=====
-function ItemFields({ items, setItems, histItemNames, histBrands, histMethods, histSizes }) {
+function ItemFields({ items, setItems, orders, itemNames, setItemNames, brands, setBrands, methods, setMethods, histSizes }) {
   const setItem = (idx, key, val) => setItems((prev) => prev.map((it, i) => i === idx ? { ...it, [key]: val } : it));
   const addItem = () => setItems((prev) => [...prev, blankItem()]);
   const delItem = (idx) => setItems((prev) => prev.length === 1 ? prev : prev.filter((_, i) => i !== idx));
@@ -257,9 +299,15 @@ function ItemFields({ items, setItems, histItemNames, histBrands, histMethods, h
             <span style={{ fontSize: 13, fontWeight: 700, color: C.blue }}>項目 {idx + 1}</span>
             <button onClick={() => delItem(idx)} style={{ ...iconBtn, width: 34, height: 34 }} aria-label="刪除項目"><Trash2 size={16} color={C.sub} /></button>
           </div>
-          <input list="hist-item-names" placeholder="項目名稱（如 改褲長）" value={it.name} onChange={(e) => setItem(idx, "name", e.target.value)} style={{ ...inp, marginBottom: 8 }} />
-          <input list="hist-brands" placeholder="品牌 / 商品種類（如 UNIQLO、自製）" value={it.brand || ""} onChange={(e) => setItem(idx, "brand", e.target.value)} style={{ ...inp, marginBottom: 8 }} />
-          <input list="hist-methods" placeholder="改法 / 規格（如 收邊3cm、雙踏縫）" value={it.method} onChange={(e) => setItem(idx, "method", e.target.value)} style={{ ...inp, marginBottom: 8 }} />
+          <div style={{ marginBottom: 8 }}>
+            <DynSelect value={it.name} onChange={(v) => setItem(idx, "name", v)} list={itemNames} setList={setItemNames} addLabel="項目名稱" orders={orders} itemFreqKey="name" emptyLabel="請選擇項目名稱" />
+          </div>
+          <div style={{ marginBottom: 8 }}>
+            <DynSelect value={it.brand || ""} onChange={(v) => setItem(idx, "brand", v)} list={brands} setList={setBrands} addLabel="品牌" orders={orders} itemFreqKey="brand" emptyLabel="（不填）" />
+          </div>
+          <div style={{ marginBottom: 8 }}>
+            <DynSelect value={it.method} onChange={(v) => setItem(idx, "method", v)} list={methods} setList={setMethods} addLabel="改法" orders={orders} itemFreqKey="method" emptyLabel="請選擇改法" />
+          </div>
           <input list="hist-sizes" placeholder="尺寸（如 原72→改68）" value={it.size} onChange={(e) => setItem(idx, "size", e.target.value)} style={{ ...inp, marginBottom: 8 }} />
           <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
             <div style={{ flex: 1 }}><MiniLabel>客人收費報價</MiniLabel>
@@ -272,9 +320,6 @@ function ItemFields({ items, setItems, histItemNames, histBrands, histMethods, h
           <input placeholder="個別備註" value={it.note} onChange={(e) => setItem(idx, "note", e.target.value)} style={inp} />
         </div>
       ))}
-      <datalist id="hist-item-names">{histItemNames.map((v) => <option key={v} value={v} />)}</datalist>
-      <datalist id="hist-brands">{histBrands.map((v) => <option key={v} value={v} />)}</datalist>
-      <datalist id="hist-methods">{histMethods.map((v) => <option key={v} value={v} />)}</datalist>
       <datalist id="hist-sizes">{histSizes.map((v) => <option key={v} value={v} />)}</datalist>
       <button onClick={addItem} style={{ ...addBtn, width: "100%", justifyContent: "center", marginBottom: 12 }}><Plus size={16} /> 新增項目</button>
     </>
@@ -282,7 +327,7 @@ function ItemFields({ items, setItems, histItemNames, histBrands, histMethods, h
 }
 
 // ===== NewOrder =====
-function NewOrder({ customers, addCustomer, orders, addOrder, masters, setMasters, platforms, setPlatforms, types, setTypes }) {
+function NewOrder({ customers, addCustomer, orders, addOrder, masters, setMasters, platforms, setPlatforms, types, setTypes, itemNames, setItemNames, brands, setBrands, methods, setMethods }) {
   const today = new Date().toISOString().slice(0, 10);
   const [date, setDate] = useState(today);
   const [custMode, setCustMode] = useState("existing");
@@ -298,10 +343,7 @@ function NewOrder({ customers, addCustomer, orders, addOrder, masters, setMaster
   const [note, setNote] = useState("");
   const [toast, setToast] = useState("");
 
-  const histItemNames = useMemo(() => [...new Set(orders.flatMap((o) => o.items.map((i) => i.name)).filter(Boolean))].sort(), [orders]);
-  const histBrands    = useMemo(() => [...new Set(orders.flatMap((o) => o.items.map((i) => i.brand || "")).filter(Boolean))].sort(), [orders]);
-  const histMethods   = useMemo(() => [...new Set(orders.flatMap((o) => o.items.map((i) => i.method)).filter(Boolean))].sort(), [orders]);
-  const histSizes     = useMemo(() => [...new Set(orders.flatMap((o) => o.items.map((i) => i.size)).filter(Boolean))].sort(), [orders]);
+  const histSizes = useMemo(() => [...new Set(orders.flatMap((o) => o.items.map((i) => i.size)).filter(Boolean))].sort(), [orders]);
 
   const liveTotal    = items.reduce((s, i) => s + (Number(i.fee) || 0), 0);
   const liveMat      = items.reduce((s, i) => s + (Number(i.itemMat) || 0), 0);
@@ -380,7 +422,7 @@ function NewOrder({ customers, addCustomer, orders, addOrder, masters, setMaster
       </Card>
 
       <SectionTitle>修改項目（一張單一位師傅，每項可記詳細）</SectionTitle>
-      <ItemFields items={items} setItems={setItems} histItemNames={histItemNames} histBrands={histBrands} histMethods={histMethods} histSizes={histSizes} />
+      <ItemFields items={items} setItems={setItems} orders={orders} itemNames={itemNames} setItemNames={setItemNames} brands={brands} setBrands={setBrands} methods={methods} setMethods={setMethods} histSizes={histSizes} />
 
       <Card>
         <Hint style={{ marginTop: 0, marginBottom: 10 }}>
@@ -415,9 +457,12 @@ function NewOrder({ customers, addCustomer, orders, addOrder, masters, setMaster
 // ===== 統計頁 =====
 const MONTHS = ["01","02","03","04","05","06","07","08","09","10","11","12"];
 
-function Stats({ orders, onGoToQuery }) {
+function Stats({ orders, customers, updateOrder, deleteOrder, changeStatus, onGoToQuery, masters, setMasters, platforms, setPlatforms, types, setTypes, itemNames, setItemNames, brands, setBrands, methods, setMethods }) {
   const [yearSel, setYearSel] = useState("");
   const [monthSel, setMonthSel] = useState("");
+  const [drill, setDrill] = useState(null);
+  const [openId, setOpenId] = useState(null);
+  const lists = { masters, setMasters, platforms, setPlatforms, types, setTypes, itemNames, setItemNames, brands, setBrands, methods, setMethods };
   const availYears = useMemo(() => [...new Set(orders.map((o) => o.date.slice(0, 4)))].sort().reverse(), [orders]);
   const filtered = useMemo(() => {
     if (!yearSel) return orders;
@@ -430,7 +475,7 @@ function Stats({ orders, onGoToQuery }) {
   const periodLabel = yearSel ? (monthSel ? `${yearSel} 年 ${Number(monthSel)} 月` : `${yearSel} 年`) : "全部";
   const agg = useMemo(() => {
     let income = 0, pay = 0, mat = 0, elec = 0, prof = 0;
-    const byMonth = {}, byYear = {}, byMaster = {}, byPlatform = {}, byStatus = {};
+    const byMonth = {}, byYear = {}, byMaster = {}, byPlatform = {}, byStatus = {}, byItem = {};
     STATUSES.forEach((s) => { byStatus[s.key] = 0; });
     filtered.forEach((o) => {
       const inc = sumFee(o), pf = profit(o), m = sumItemMat(o);
@@ -441,9 +486,86 @@ function Stats({ orders, onGoToQuery }) {
       byMaster[o.master]     = (byMaster[o.master]     || 0) + o.masterPay;
       byPlatform[o.platform] = (byPlatform[o.platform] || 0) + inc;
       byStatus[o.status || "待處理"] = (byStatus[o.status || "待處理"] || 0) + 1;
+      o.items.forEach((it) => { byItem[it.name] = (byItem[it.name] || 0) + itemProfit(it); });
     });
-    return { income, pay, mat, elec, prof, byMonth, byYear, byMaster, byPlatform, byStatus };
+    return { income, pay, mat, elec, prof, byMonth, byYear, byMaster, byPlatform, byStatus, byItem };
   }, [filtered]);
+
+  if (openId) {
+    const o = orders.find((x) => x.id === openId);
+    const cust = customers.find((c) => c.id === o.cust);
+    return (
+      <OrderDetail
+        order={o} cust={cust}
+        onBack={() => setOpenId(null)}
+        onChangeStatus={(s) => changeStatus(o.id, s)}
+        onUpdateOrder={updateOrder}
+        onDeleteOrder={(id) => { deleteOrder(id); setOpenId(null); }}
+        lists={lists}
+        orders={orders}
+      />
+    );
+  }
+
+  if (drill) {
+    let list;
+    if (drill.type === "master")        list = filtered.filter((o) => o.master === drill.key);
+    else if (drill.type === "platform") list = filtered.filter((o) => o.platform === drill.key);
+    else                                 list = orders.filter((o) => o.date.startsWith(drill.key));
+    list = [...list].sort((a, b) => b.date.localeCompare(a.date));
+    const showItemBreak = drill.type === "month" || drill.type === "year";
+    const byItem = {};
+    if (showItemBreak) list.forEach((o) => o.items.forEach((it) => { byItem[it.name] = (byItem[it.name] || 0) + itemProfit(it); }));
+    const totalIncome = list.reduce((s, o) => s + sumFee(o), 0);
+    const totalProfit = list.reduce((s, o) => s + profit(o), 0);
+    const totalPay    = list.reduce((s, o) => s + (Number(o.masterPay) || 0), 0);
+    return (
+      <div>
+        <button onClick={() => setDrill(null)} style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", color: C.blue, fontSize: 15, fontWeight: 600, cursor: "pointer", padding: 0, marginBottom: 12 }}>
+          <ArrowLeft size={18} /> 返回統計
+        </button>
+        <SectionTitle>{drill.label}</SectionTitle>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+          <Stat label="訂單數" value={list.length + " 筆"} />
+          {drill.type === "master"
+            ? <Stat label="師傅工資合計" value={NT(totalPay)} />
+            : <Stat label="收入合計" value={NT(totalIncome)} />}
+          {drill.type !== "master" && drill.type !== "platform" && <Stat label="毛利合計" value={NT(totalProfit)} color={totalProfit < 0 ? C.red : C.green} />}
+        </div>
+        {showItemBreak && (
+          <Card>
+            <Label>各項目毛利</Label>
+            {Object.entries(byItem).sort((a, b) => b[1] - a[1]).map(([k, v]) => <Row key={k} label={k} value={NT(v)} color={v < 0 ? C.red : C.green} />)}
+            {Object.keys(byItem).length === 0 && <div style={{ fontSize: 13, color: C.sub }}>無項目資料</div>}
+          </Card>
+        )}
+        <SectionTitle>訂單清單</SectionTitle>
+        {list.length === 0 && <Empty icon={X} text="無符合的訂單" />}
+        {list.map((o) => {
+          const cust = customers.find((c) => c.id === o.cust);
+          const sm = statusMeta(o.status || "待處理");
+          return (
+            <button key={o.id} onClick={() => setOpenId(o.id)}
+              style={{ width: "100%", textAlign: "left", background: "#fff", borderRadius: 12, padding: 16, border: `1px solid ${C.line}`, marginBottom: 12, cursor: "pointer", display: "block" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <span style={{ fontWeight: 700, fontSize: 15 }}>{o.date}</span>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <span style={{ fontSize: 11, color: sm.color, background: sm.bg, padding: "2px 9px", borderRadius: 20, fontWeight: 700 }}>{o.status || "待處理"}</span>
+                  <span style={{ fontSize: 12, color: "#fff", background: o.type === "訂做" ? C.gold : C.blue, padding: "2px 10px", borderRadius: 20 }}>{o.type} · {o.master}</span>
+                </div>
+              </div>
+              <div style={{ fontSize: 13, color: C.sub, marginBottom: 8 }}>{cust?.name}（{o.cust}）</div>
+              <div style={{ fontSize: 14, color: "#334155" }}>{o.items.map((i) => i.name).join("、")}</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, paddingTop: 10, borderTop: `1px dashed ${C.line}` }}>
+                <span style={{ fontSize: 13, color: C.sub }}>{o.items.length} 項 · 本單收入 {NT(sumFee(o))}</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 2, color: C.blue, fontSize: 13, fontWeight: 600 }}>看明細 <ChevronRight size={16} /></span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -484,17 +606,32 @@ function Stats({ orders, onGoToQuery }) {
         <Stat label="電費合計" value={NT(agg.elec)} />
         <Stat label="訂單數" value={filtered.length + " 筆"} />
       </div>
+      <Card>
+        <Label>各項目毛利（{periodLabel}）</Label>
+        {Object.entries(agg.byItem).sort((a, b) => b[1] - a[1]).map(([k, v]) => <Row key={k} label={k} value={NT(v)} color={v < 0 ? C.red : C.green} />)}
+        {Object.keys(agg.byItem).length === 0 && <div style={{ fontSize: 13, color: C.sub }}>尚無資料</div>}
+      </Card>
       {!yearSel && (
         <>
-          <Card><Label>每月毛利</Label>{Object.entries(agg.byMonth).sort().reverse().map(([k, v]) => <Row key={k} label={k} value={NT(v)} color={v < 0 ? C.red : C.green} />)}</Card>
-          <Card><Label>每年毛利</Label>{Object.entries(agg.byYear).sort().reverse().map(([k, v]) => <Row key={k} label={k} value={NT(v)} color={v < 0 ? C.red : C.green} />)}</Card>
+          <Card><Label>每月毛利</Label>{Object.entries(agg.byMonth).sort().reverse().map(([k, v]) => (
+            <ClickRow key={k} label={k} value={NT(v)} color={v < 0 ? C.red : C.green} onClick={() => setDrill({ type: "month", key: k, label: `${k.slice(0, 4)} 年 ${Number(k.slice(5))} 月明細` })} />
+          ))}</Card>
+          <Card><Label>每年毛利</Label>{Object.entries(agg.byYear).sort().reverse().map(([k, v]) => (
+            <ClickRow key={k} label={k} value={NT(v)} color={v < 0 ? C.red : C.green} onClick={() => setDrill({ type: "year", key: k, label: `${k} 年明細` })} />
+          ))}</Card>
         </>
       )}
       {yearSel && !monthSel && (
-        <Card><Label>{yearSel} 年各月毛利</Label>{Object.entries(agg.byMonth).sort().map(([k, v]) => <Row key={k} label={`${Number(k.slice(5))} 月`} value={NT(v)} color={v < 0 ? C.red : C.green} />)}</Card>
+        <Card><Label>{yearSel} 年各月毛利</Label>{Object.entries(agg.byMonth).sort().map(([k, v]) => (
+          <ClickRow key={k} label={`${Number(k.slice(5))} 月`} value={NT(v)} color={v < 0 ? C.red : C.green} onClick={() => setDrill({ type: "month", key: k, label: `${k.slice(0, 4)} 年 ${Number(k.slice(5))} 月明細` })} />
+        ))}</Card>
       )}
-      <Card><Label>各師傅工資</Label>{Object.entries(agg.byMaster).sort().map(([k, v]) => <Row key={k} label={k} value={NT(v)} bold />)}</Card>
-      <Card><Label>各平台收入</Label>{Object.entries(agg.byPlatform).sort((a, b) => b[1] - a[1]).map(([k, v]) => <Row key={k} label={k} value={NT(v)} />)}</Card>
+      <Card><Label>各師傅工資</Label>{Object.entries(agg.byMaster).sort().map(([k, v]) => (
+        <ClickRow key={k} label={k} value={NT(v)} bold onClick={() => setDrill({ type: "master", key: k, label: `${k} 師傅 — ${periodLabel}` })} />
+      ))}</Card>
+      <Card><Label>各平台收入</Label>{Object.entries(agg.byPlatform).sort((a, b) => b[1] - a[1]).map(([k, v]) => (
+        <ClickRow key={k} label={k} value={NT(v)} onClick={() => setDrill({ type: "platform", key: k, label: `${k} 平台 — ${periodLabel}` })} />
+      ))}</Card>
     </div>
   );
 }
@@ -506,7 +643,7 @@ const DIM_DEFS = [
   { key: "item", label: "修改項目" },
 ];
 
-function Query({ customers, orders, updateOrder, deleteOrder, changeStatus, masters, setMasters, platforms, setPlatforms, types, setTypes, initStatusFilter }) {
+function Query({ customers, orders, updateOrder, deleteOrder, changeStatus, masters, setMasters, platforms, setPlatforms, types, setTypes, itemNames, setItemNames, brands, setBrands, methods, setMethods, initStatusFilter }) {
   const [dims, setDims] = useState({ name: false, id: false, item: false });
   const [q, setQ] = useState("");
   const [statusFilter, setStatusFilter] = useState(initStatusFilter || "");
@@ -565,7 +702,7 @@ function Query({ customers, orders, updateOrder, deleteOrder, changeStatus, mast
       onChangeStatus={(s) => changeStatus(openOrder.id, s)}
       onUpdateOrder={updateOrder}
       onDeleteOrder={handleDelete}
-      lists={{ masters, setMasters, platforms, setPlatforms, types, setTypes }}
+      lists={{ masters, setMasters, platforms, setPlatforms, types, setTypes, itemNames, setItemNames, brands, setBrands, methods, setMethods }}
       orders={orders}
     />
   );
@@ -659,17 +796,14 @@ function Query({ customers, orders, updateOrder, deleteOrder, changeStatus, mast
 
 // ===== 訂單詳細（含編輯 / 刪除）=====
 function OrderDetail({ order, cust, onBack, onChangeStatus, onUpdateOrder, onDeleteOrder, lists, orders }) {
-  const { masters, setMasters, platforms, setPlatforms, types, setTypes } = lists;
+  const { masters, setMasters, platforms, setPlatforms, types, setTypes, itemNames, setItemNames, brands, setBrands, methods, setMethods } = lists;
   const [isEditing, setIsEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [ed, setEd] = useState(null);
   const [edMasterPayOverride, setEdMasterPayOverride] = useState(false);
   const [edMasterPayManual, setEdMasterPayManual] = useState("");
 
-  const histItemNames = useMemo(() => [...new Set(orders.flatMap((o) => o.items.map((i) => i.name)).filter(Boolean))].sort(), [orders]);
-  const histBrands    = useMemo(() => [...new Set(orders.flatMap((o) => o.items.map((i) => i.brand || "")).filter(Boolean))].sort(), [orders]);
-  const histMethods   = useMemo(() => [...new Set(orders.flatMap((o) => o.items.map((i) => i.method)).filter(Boolean))].sort(), [orders]);
-  const histSizes     = useMemo(() => [...new Set(orders.flatMap((o) => o.items.map((i) => i.size)).filter(Boolean))].sort(), [orders]);
+  const histSizes = useMemo(() => [...new Set(orders.flatMap((o) => o.items.map((i) => i.size)).filter(Boolean))].sort(), [orders]);
 
   const startEdit = () => {
     const autoSum = sumItemPay(order);
@@ -726,7 +860,7 @@ function OrderDetail({ order, cust, onBack, onChangeStatus, onUpdateOrder, onDel
           <DynSelect value={ed.platform} onChange={(v) => setEd({ ...ed, platform: v })} list={platforms} setList={setPlatforms} addLabel="來源平台" orders={orders} freqKey="platform" />
         </Card>
         <SectionTitle>修改項目</SectionTitle>
-        <ItemFields items={ed.items} setItems={setEdItems} histItemNames={histItemNames} histBrands={histBrands} histMethods={histMethods} histSizes={histSizes} />
+        <ItemFields items={ed.items} setItems={setEdItems} orders={orders} itemNames={itemNames} setItemNames={setItemNames} brands={brands} setBrands={setBrands} methods={methods} setMethods={setMethods} histSizes={histSizes} />
         <Card>
           <Hint style={{ marginTop: 0, marginBottom: 10 }}>各項師傅工資加總：{NT(edItemPaySum)}（自動帶入下方整單工資，可手動調整）</Hint>
           <div style={{ display: "flex", gap: 10 }}>
@@ -830,6 +964,54 @@ function OrderDetail({ order, cust, onBack, onChangeStatus, onUpdateOrder, onDel
   );
 }
 
+function OptionListEditor({ label, list, setList }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [addVal, setAddVal] = useState("");
+  const confirm = () => {
+    const v = addVal.trim();
+    if (!v) return;
+    if (!list.includes(v)) setList((prev) => [...prev, v]);
+    setAddVal(""); setShowAdd(false);
+  };
+  const remove = (v) => setList((prev) => prev.filter((x) => x !== v));
+  return (
+    <Card>
+      <Label style={{ marginBottom: 10 }}>{label}</Label>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: showAdd ? 10 : 0 }}>
+        {list.map((v) => (
+          <div key={v} style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 8px 6px 12px", background: C.bg, borderRadius: 20, fontSize: 13 }}>
+            <span>{v}</span>
+            <button onClick={() => remove(v)} style={{ background: "none", border: "none", cursor: "pointer", padding: 2, display: "flex" }} aria-label={`刪除${v}`}>
+              <X size={13} color={C.sub} />
+            </button>
+          </div>
+        ))}
+        {list.length === 0 && <span style={{ fontSize: 13, color: C.sub }}>尚無選項</span>}
+      </div>
+      {showAdd ? (
+        <AddInline placeholder={`新增${label}`} value={addVal} onChange={setAddVal} onConfirm={confirm} onCancel={() => { setShowAdd(false); setAddVal(""); }} />
+      ) : (
+        <button onClick={() => setShowAdd(true)} style={{ ...addBtn, marginTop: 10 }}><Plus size={16} /> 新增{label}</button>
+      )}
+    </Card>
+  );
+}
+
+function SettingsPage({ itemNames, setItemNames, brands, setBrands, methods, setMethods, masters, setMasters, types, setTypes, platforms, setPlatforms }) {
+  return (
+    <div>
+      <SectionTitle>下拉選單管理</SectionTitle>
+      <Hint style={{ marginTop: 0, marginBottom: 14 }}>新增/刪除以下欄位的選項，會套用到「建檔」與「編輯訂單」的下拉選單。刪除選項不會影響已存在的訂單紀錄。</Hint>
+      <OptionListEditor label="項目名稱" list={itemNames} setList={setItemNames} />
+      <OptionListEditor label="品牌" list={brands} setList={setBrands} />
+      <OptionListEditor label="改法" list={methods} setList={setMethods} />
+      <OptionListEditor label="師傅" list={masters} setList={setMasters} />
+      <OptionListEditor label="類型" list={types} setList={setTypes} />
+      <OptionListEditor label="來源平台" list={platforms} setList={setPlatforms} />
+    </div>
+  );
+}
+
 // ===== 樣式常數 =====
 const inp     = { width: "100%", padding: "11px 12px", borderRadius: 9, border: `1px solid #E2E8F0`, fontSize: 15, boxSizing: "border-box", background: "#fff", color: "#0F172A", outline: "none" };
 const iconBtn = { width: 42, height: 42, border: `1px solid #E2E8F0`, background: "#fff", borderRadius: 9, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" };
@@ -843,6 +1025,7 @@ function MiniLabel({ children })             { return <div style={{ fontSize: 11
 function Hint({ children, style })           { return <div style={{ fontSize: 12, color: C.sub, marginTop: 6, ...style }}>{children}</div>; }
 function Toggle({ active, onClick, children }) { return <button onClick={onClick} style={{ flex: 1, padding: "9px 0", borderRadius: 9, border: `1.5px solid ${active ? C.blue : C.line}`, background: active ? C.blue : "#fff", color: active ? "#fff" : C.sub, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>{children}</button>; }
 function Row({ label, value, color, bold })  { return <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 14 }}><span style={{ color: C.sub }}>{label}</span><span style={{ color: color || C.ink, fontWeight: bold ? 700 : 500 }}>{value}</span></div>; }
+function ClickRow({ label, value, color, bold, onClick }) { return <button onClick={onClick} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", padding: "5px 0", fontSize: 14, background: "none", border: "none", cursor: "pointer", textAlign: "left" }}><span style={{ color: C.sub }}>{label}</span><span style={{ display: "flex", alignItems: "center", gap: 2 }}><span style={{ color: color || C.ink, fontWeight: bold ? 700 : 500 }}>{value}</span><ChevronRight size={15} color={C.sub} /></span></button>; }
 function DetailRow({ k, v })                 { return <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", fontSize: 14 }}><span style={{ color: C.sub }}>{k}</span><span style={{ color: C.ink, maxWidth: "65%", textAlign: "right" }}>{v}</span></div>; }
 function Stat({ label, value, color, big })  { return <div style={{ background: "#fff", borderRadius: 12, padding: 14, border: `1px solid ${C.line}` }}><div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>{label}</div><div style={{ fontSize: big ? 22 : 18, fontWeight: 700, color: color || C.ink }}>{value}</div></div>; }
 function Empty({ icon: Icon, text })         { return <div style={{ textAlign: "center", padding: "48px 20px", color: C.sub }}><Icon size={40} strokeWidth={1.4} style={{ opacity: 0.4 }} /><div style={{ marginTop: 12, fontSize: 14, whiteSpace: "pre-line" }}>{text}</div></div>; }
